@@ -67,7 +67,7 @@ pipeline {
             }
             post {
                 always {
-                    junit '**/target/surefire-reports/*.xml', allowEmptyResults: true
+                    junit testResults: '**/target/surefire-reports/*.xml', allowEmptyResults: true
                 }
             }
         }
