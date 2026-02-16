@@ -54,7 +54,19 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 3: SAST - SonarQube (NEW)
+        // STAGE 3: Build (MUST happen before SonarQube)
+        // ==========================================
+        stage('Build') {
+            steps {
+                sh '''
+                    echo "=== 🔨 Building Application ==="
+                    ./mvnw clean compile -DskipTests
+                '''
+            }
+        }
+        
+        // ==========================================
+        // STAGE 4: SAST - SonarQube (AFTER build)
         // ==========================================
         stage('SAST - SonarQube') {
             steps {
@@ -67,24 +79,12 @@ pipeline {
                             -Dsonar.projectKey=spring-petclinic \
                             -Dsonar.projectName='Spring PetClinic Microservices' \
                             -Dsonar.sources=. \
-                            -Dsonar.java.binaries=target/classes \
+                            -Dsonar.java.binaries=**/target/classes \
                             -Dsonar.exclusions=**/target/**,**/*.min.js,**/node_modules/**,**/.mvn/**,**/mvnw \
                             -Dsonar.sourceEncoding=UTF-8
                         """
                     }
                 }
-            }
-        }
-        
-        // ==========================================
-        // STAGE 4: Build
-        // ==========================================
-        stage('Build') {
-            steps {
-                sh '''
-                    echo "=== 🔨 Building Application ==="
-                    ./mvnw clean compile -DskipTests
-                '''
             }
         }
         
@@ -118,8 +118,8 @@ pipeline {
             echo "=========================================="
             echo "✅ Environment Check: COMPLETED"
             echo "✅ Secret Scanning: COMPLETED"
-            echo "✅ SAST (SonarQube): COMPLETED"
             echo "✅ Build: COMPLETED"
+            echo "✅ SAST (SonarQube): COMPLETED"
             echo "✅ Unit Tests: COMPLETED"
             echo "=========================================="
         }
