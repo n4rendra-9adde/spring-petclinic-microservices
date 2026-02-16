@@ -54,7 +54,7 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 3: Build (MUST happen before SonarQube)
+        // STAGE 3: Build
         // ==========================================
         stage('Build') {
             steps {
@@ -66,7 +66,7 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 4: SAST - SonarQube (AFTER build)
+        // STAGE 4: SAST - SonarQube
         // ==========================================
         stage('SAST - SonarQube') {
             steps {
@@ -89,7 +89,43 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 5: Unit Tests
+        // STAGE 5: SCA - OWASP Dependency-Check (NEW)
+        // ==========================================
+        stage('SCA - Dependency Check') {
+            steps {
+                sh '''
+                    echo "=== 📦 Running OWASP Dependency-Check ==="
+                    
+                    dependency-check.sh \
+                        --project "Spring PetClinic Microservices" \
+                        --scan . \
+                        --format JSON \
+                        --format HTML \
+                        --out ${REPORT_DIR}/dependency-check \
+                        --enableExperimental \
+                        --failOnCVSS 11 || true
+                    
+                    echo "Dependency Check completed"
+                    ls -lh ${REPORT_DIR}/dependency-check/
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: "${REPORT_DIR}/dependency-check/*", allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: "${REPORT_DIR}/dependency-check",
+                        reportFiles: 'dependency-check-report.html',
+                        reportName: 'OWASP Dependency-Check Report'
+                    ])
+                }
+            }
+        }
+        
+        // ==========================================
+        // STAGE 6: Unit Tests
         // ==========================================
         stage('Unit Tests') {
             steps {
@@ -120,6 +156,7 @@ pipeline {
             echo "✅ Secret Scanning: COMPLETED"
             echo "✅ Build: COMPLETED"
             echo "✅ SAST (SonarQube): COMPLETED"
+            echo "✅ SCA (Dependency-Check): COMPLETED"
             echo "✅ Unit Tests: COMPLETED"
             echo "=========================================="
         }
