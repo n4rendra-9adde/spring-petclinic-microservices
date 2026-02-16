@@ -12,9 +12,6 @@ pipeline {
     }
     
     stages {
-        // ==========================================
-        // STAGE 1: Environment Check
-        // ==========================================
         stage('Environment Check') {
             steps {
                 echo '✅ Pipeline started - Build #' + env.BUILD_NUMBER
@@ -29,9 +26,6 @@ pipeline {
             }
         }
         
-        // ==========================================
-        // STAGE 2: Secret Scanning (Gitleaks)
-        // ==========================================
         stage('Secret Scanning') {
             steps {
                 sh '''
@@ -55,9 +49,6 @@ pipeline {
             }
         }
         
-        // ==========================================
-        // STAGE 3: Build Application
-        // ==========================================
         stage('Build') {
             steps {
                 sh '''
@@ -67,9 +58,6 @@ pipeline {
             }
         }
         
-        // ==========================================
-        // STAGE 4: SAST - SonarQube
-        // ==========================================
         stage('SAST - SonarQube') {
             steps {
                 script {
@@ -90,9 +78,6 @@ pipeline {
             }
         }
         
-        // ==========================================
-        // STAGE 5: SCA - OWASP Dependency-Check
-        // ==========================================
         stage('SCA - Dependency Check') {
             steps {
                 sh '''
@@ -117,9 +102,6 @@ pipeline {
             }
         }
         
-        // ==========================================
-        // STAGE 6: Unit Tests
-        // ==========================================
         stage('Unit Tests') {
             steps {
                 sh '''
@@ -139,17 +121,13 @@ pipeline {
             }
         }
         
-        // ==========================================
-        // STAGE 7: Container Build & Scan (PROPER)
-        // ==========================================
         stage('Container Security') {
             steps {
                 script {
-                    // Build Docker image for config-server using existing Dockerfile
                     sh '''
                         echo "=== 🐳 Building Docker Image ==="
                         
-                        # Build JAR first (in case it wasn't built)
+                        # Build JAR for config-server
                         ./mvnw package -pl spring-petclinic-config-server -am -DskipTests -q
                         
                         # Get the JAR name
@@ -182,8 +160,6 @@ pipeline {
                             petclinic-config-server:${IMAGE_TAG} || true
                         
                         echo "✅ Container Security Scan Completed"
-                        echo "Scan Results:"
-                        cat ${REPORT_DIR}/trivy-report.txt | head -20
                     '''
                 }
             }
@@ -192,7 +168,8 @@ pipeline {
                     archiveArtifacts artifacts: "${REPORT_DIR}/trivy-report.*", allowEmptyArchive: true
                 }
             }
-        } 
+        }
+    }
     
     post {
         always {
