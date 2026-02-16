@@ -140,21 +140,35 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 7: Container Build & Scan (NEW)
+        // STAGE 7: Container Build & Scan (PROPER)
         // ==========================================
         stage('Container Security') {
             steps {
                 script {
-                    // Build one service as example (config-server)
+                    // Build Docker image for config-server using existing Dockerfile
                     sh '''
                         echo "=== 🐳 Building Docker Image ==="
                         
-                        cd spring-petclinic-config-server
-                        docker build -t petclinic-config-server:${IMAGE_TAG} .
-                        cd ..
+                        # Build JAR first (in case it wasn't built)
+                        ./mvnw package -pl spring-petclinic-config-server -am -DskipTests -q
+                        
+                        # Get the JAR name
+                        JAR_FILE=$(ls spring-petclinic-config-server/target/*.jar | head -1)
+                        ARTIFACT_NAME=$(basename $JAR_FILE .jar)
+                        
+                        echo "Building image for: $ARTIFACT_NAME"
+                        
+                        # Build Docker image using the project's Dockerfile
+                        docker build \
+                            --build-arg ARTIFACT_NAME=$ARTIFACT_NAME \
+                            --build-arg EXPOSED_PORT=8888 \
+                            -f docker/Dockerfile \
+                            -t petclinic-config-server:${IMAGE_TAG} \
+                            spring-petclinic-config-server/
                         
                         echo "=== 🔍 Scanning with Trivy ==="
                         
+                        # Scan the built image
                         trivy image \
                             --format json \
                             --output ${REPORT_DIR}/trivy-report.json \
@@ -167,8 +181,9 @@ pipeline {
                             --severity HIGH,CRITICAL \
                             petclinic-config-server:${IMAGE_TAG} || true
                         
-                        echo "Trivy scan completed"
-                        cat ${REPORT_DIR}/trivy-report.txt 2>/dev/null || echo "No text report generated"
+                        echo "✅ Container Security Scan Completed"
+                        echo "Scan Results:"
+                        cat ${REPORT_DIR}/trivy-report.txt | head -20
                     '''
                 }
             }
@@ -177,8 +192,7 @@ pipeline {
                     archiveArtifacts artifacts: "${REPORT_DIR}/trivy-report.*", allowEmptyArchive: true
                 }
             }
-        }
-    }
+        } 
     
     post {
         always {
