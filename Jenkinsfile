@@ -6,11 +6,13 @@ pipeline {
         JAVA_HOME = tool 'JDK-17'
         PATH = "${MAVEN_HOME}/bin:${JAVA_HOME}/bin:${env.PATH}"
         REPORT_DIR = 'security-reports'
+        SONAR_TOKEN = credentials('sonarqube-token')
+        SONAR_HOST_URL = 'http://localhost:9000'
     }
     
     stages {
         // ==========================================
-        // STAGE 1: Environment Check (from Step 1)
+        // STAGE 1: Environment Check
         // ==========================================
         stage('Environment Check') {
             steps {
@@ -25,7 +27,7 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 2: Secret Scanning (NEW - Step 3)
+        // STAGE 2: Secret Scanning (Gitleaks)
         // ==========================================
         stage('Secret Scanning') {
             steps {
@@ -33,11 +35,9 @@ pipeline {
                     echo "=== 🔒 Running Gitleaks Secret Scan ==="
                     mkdir -p ${REPORT_DIR}
                     
-                    # Run gitleaks
                     gitleaks detect --source . --verbose --report-format json \
                         --report-path ${REPORT_DIR}/gitleaks-report.json || true
                     
-                    # Show results summary
                     if [ -s ${REPORT_DIR}/gitleaks-report.json ]; then
                         echo "⚠️  WARNING: Potential secrets found!"
                         echo "Count: $(cat ${REPORT_DIR}/gitleaks-report.json | grep -c 'Match' || echo '0')"
@@ -54,7 +54,30 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 3: Build (from Step 1)
+        // STAGE 3: SAST - SonarQube (NEW)
+        // ==========================================
+        stage('SAST - SonarQube') {
+            steps {
+                script {
+                    def scannerHome = tool 'SonarScanner'
+                    withSonarQubeEnv('SonarQube') {
+                        sh """
+                            echo "=== 🔍 Running SonarQube SAST Analysis ==="
+                            ${scannerHome}/bin/sonar-scanner \
+                            -Dsonar.projectKey=spring-petclinic \
+                            -Dsonar.projectName='Spring PetClinic Microservices' \
+                            -Dsonar.sources=. \
+                            -Dsonar.java.binaries=target/classes \
+                            -Dsonar.exclusions=**/target/**,**/*.min.js,**/node_modules/**,**/.mvn/**,**/mvnw \
+                            -Dsonar.sourceEncoding=UTF-8
+                        """
+                    }
+                }
+            }
+        }
+        
+        // ==========================================
+        // STAGE 4: Build
         // ==========================================
         stage('Build') {
             steps {
@@ -66,7 +89,7 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 4: Unit Tests (from Step 2)
+        // STAGE 5: Unit Tests
         // ==========================================
         stage('Unit Tests') {
             steps {
@@ -95,6 +118,7 @@ pipeline {
             echo "=========================================="
             echo "✅ Environment Check: COMPLETED"
             echo "✅ Secret Scanning: COMPLETED"
+            echo "✅ SAST (SonarQube): COMPLETED"
             echo "✅ Build: COMPLETED"
             echo "✅ Unit Tests: COMPLETED"
             echo "=========================================="
