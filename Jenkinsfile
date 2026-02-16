@@ -121,7 +121,7 @@ pipeline {
             }
         }
         
-        stage('Container Security') {
+               stage('Container Security') {
             steps {
                 script {
                     sh '''
@@ -130,19 +130,31 @@ pipeline {
                         # Build JAR for config-server
                         ./mvnw package -pl spring-petclinic-config-server -am -DskipTests -q
                         
+                        cd spring-petclinic-config-server
+                        
                         # Get the JAR name
-                        JAR_FILE=$(ls spring-petclinic-config-server/target/*.jar | head -1)
+                        JAR_FILE=$(ls target/*.jar | head -1)
                         ARTIFACT_NAME=$(basename $JAR_FILE .jar)
                         
                         echo "Building image for: $ARTIFACT_NAME"
+                        echo "JAR location: $JAR_FILE"
                         
-                        # Build Docker image using the project's Dockerfile
+                        # Create a temp directory for Docker build
+                        mkdir -p docker-build
+                        cp $JAR_FILE docker-build/
+                        cp ../docker/Dockerfile docker-build/
+                        
+                        # Build Docker image with correct context
                         docker build \
                             --build-arg ARTIFACT_NAME=$ARTIFACT_NAME \
                             --build-arg EXPOSED_PORT=8888 \
-                            -f docker/Dockerfile \
                             -t petclinic-config-server:${IMAGE_TAG} \
-                            spring-petclinic-config-server/
+                            docker-build/
+                        
+                        # Cleanup
+                        rm -rf docker-build
+                        
+                        cd ..
                         
                         echo "=== 🔍 Scanning with Trivy ==="
                         
@@ -168,7 +180,7 @@ pipeline {
                     archiveArtifacts artifacts: "${REPORT_DIR}/trivy-report.*", allowEmptyArchive: true
                 }
             }
-        }
+        } 
     }
     
     post {
