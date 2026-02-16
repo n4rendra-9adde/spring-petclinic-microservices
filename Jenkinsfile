@@ -5,48 +5,56 @@ pipeline {
         MAVEN_HOME = tool 'Maven-3.9'
         JAVA_HOME = tool 'JDK-17'
         PATH = "${MAVEN_HOME}/bin:${JAVA_HOME}/bin:${env.PATH}"
+        REPORT_DIR = 'test-reports'
     }
     
     stages {
         stage('Hello') {
             steps {
                 echo '✅ Jenkins pipeline is working!'
-                echo "Build number: ${BUILD_NUMBER}"
-                echo "Git commit: ${GIT_COMMIT}"
-            }
-        }
-        
-        stage('Check Tools') {
-            steps {
-                sh '''
-                    echo "=== Checking Java ==="
-                    java -version
-                    
-                    echo "=== Checking Maven ==="
-                    mvn -version
-                '''
             }
         }
         
         stage('Build') {
             steps {
                 sh '''
-                    echo "=== Building Spring PetClinic ==="
+                    echo "=== Compiling Code ==="
                     ./mvnw clean compile -DskipTests
                 '''
+            }
+        }
+        
+        stage('Unit Tests') {
+            steps {
+                sh '''
+                    echo "=== Running Unit Tests ==="
+                    ./mvnw test
+                '''
+            }
+            post {
+                always {
+                    // Publish test results
+                    junit testResults: '**/target/surefire-reports/*.xml', allowEmptyResults: true
+                    
+                    // Archive test reports
+                    sh 'mkdir -p ${REPORT_DIR}'
+                    sh 'cp -r */target/surefire-reports ${REPORT_DIR}/ || true'
+                    sh 'cp -r */target/site/jacoco ${REPORT_DIR}/ || true'
+                    archiveArtifacts artifacts: "${REPORT_DIR}/**/*", allowEmptyArchive: true
+                }
             }
         }
     }
     
     post {
         always {
-            echo "Pipeline finished!"
+            echo "Pipeline finished - Build #${BUILD_NUMBER}"
         }
         success {
-            echo "✅ SUCCESS!"
+            echo "✅ Build & Tests Successful!"
         }
         failure {
-            echo "❌ FAILED!"
+            echo "❌ Build Failed!"
         }
     }
 }
