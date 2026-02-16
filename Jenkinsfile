@@ -8,6 +8,7 @@ pipeline {
         REPORT_DIR = 'security-reports'
         SONAR_TOKEN = credentials('sonarqube-token')
         SONAR_HOST_URL = 'http://localhost:9000'
+        IMAGE_TAG = "${BUILD_NUMBER}"
     }
     
     stages {
@@ -22,6 +23,8 @@ pipeline {
                     java -version
                     echo "Maven version:"
                     mvn -version
+                    echo "Docker version:"
+                    docker --version
                 '''
             }
         }
@@ -40,7 +43,6 @@ pipeline {
                     
                     if [ -s ${REPORT_DIR}/gitleaks-report.json ]; then
                         echo "⚠️  WARNING: Potential secrets found!"
-                        echo "Count: $(cat ${REPORT_DIR}/gitleaks-report.json | grep -c 'Match' || echo '0')"
                     else
                         echo "✅ No secrets detected"
                     fi
@@ -54,13 +56,13 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 3: Build
+        // STAGE 3: Build Application
         // ==========================================
         stage('Build') {
             steps {
                 sh '''
                     echo "=== 🔨 Building Application ==="
-                    ./mvnw clean compile -DskipTests
+                    ./mvnw clean package -DskipTests
                 '''
             }
         }
@@ -89,14 +91,14 @@ pipeline {
         }
         
         // ==========================================
-        // STAGE 5: SCA - OWASP Dependency-Check (NEW)
+        // STAGE 5: SCA - OWASP Dependency-Check
         // ==========================================
         stage('SCA - Dependency Check') {
             steps {
                 sh '''
                     echo "=== 📦 Running OWASP Dependency-Check ==="
                     
-                    dependency-check.sh \
+                    /opt/dependency-check/bin/dependency-check.sh \
                         --project "Spring PetClinic Microservices" \
                         --scan . \
                         --format JSON \
@@ -106,20 +108,11 @@ pipeline {
                         --failOnCVSS 11 || true
                     
                     echo "Dependency Check completed"
-                    ls -lh ${REPORT_DIR}/dependency-check/
                 '''
             }
             post {
                 always {
                     archiveArtifacts artifacts: "${REPORT_DIR}/dependency-check/*", allowEmptyArchive: true
-                    publishHTML(target: [
-                        allowMissing: true,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: "${REPORT_DIR}/dependency-check",
-                        reportFiles: 'dependency-check-report.html',
-                        reportName: 'OWASP Dependency-Check Report'
-                    ])
                 }
             }
         }
@@ -145,6 +138,46 @@ pipeline {
                 }
             }
         }
+        
+        // ==========================================
+        // STAGE 7: Container Build & Scan (NEW)
+        // ==========================================
+        stage('Container Security') {
+            steps {
+                script {
+                    // Build one service as example (config-server)
+                    sh '''
+                        echo "=== 🐳 Building Docker Image ==="
+                        
+                        cd spring-petclinic-config-server
+                        docker build -t petclinic-config-server:${IMAGE_TAG} .
+                        cd ..
+                        
+                        echo "=== 🔍 Scanning with Trivy ==="
+                        
+                        trivy image \
+                            --format json \
+                            --output ${REPORT_DIR}/trivy-report.json \
+                            --severity HIGH,CRITICAL \
+                            petclinic-config-server:${IMAGE_TAG} || true
+                        
+                        trivy image \
+                            --format table \
+                            --output ${REPORT_DIR}/trivy-report.txt \
+                            --severity HIGH,CRITICAL \
+                            petclinic-config-server:${IMAGE_TAG} || true
+                        
+                        echo "Trivy scan completed"
+                        cat ${REPORT_DIR}/trivy-report.txt 2>/dev/null || echo "No text report generated"
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: "${REPORT_DIR}/trivy-report.*", allowEmptyArchive: true
+                }
+            }
+        }
     }
     
     post {
@@ -158,6 +191,7 @@ pipeline {
             echo "✅ SAST (SonarQube): COMPLETED"
             echo "✅ SCA (Dependency-Check): COMPLETED"
             echo "✅ Unit Tests: COMPLETED"
+            echo "✅ Container Security: COMPLETED"
             echo "=========================================="
         }
         success {
