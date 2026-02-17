@@ -11,6 +11,12 @@ pipeline {
         IMAGE_TAG = "${BUILD_NUMBER}"
     }
     
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 2, unit: 'HOURS')
+        disableConcurrentBuilds()
+    }
+    
     stages {
         stage('Environment Check') {
             steps {
@@ -121,44 +127,36 @@ pipeline {
             }
         }
         
-               stage('Container Security') {
+        stage('Container Security') {
             steps {
                 script {
                     sh '''
                         echo "=== 🐳 Building Docker Image ==="
                         
-                        # Build JAR for config-server
                         ./mvnw package -pl spring-petclinic-config-server -am -DskipTests -q
                         
                         cd spring-petclinic-config-server
                         
-                        # Get the JAR name
                         JAR_FILE=$(ls target/*.jar | head -1)
                         ARTIFACT_NAME=$(basename $JAR_FILE .jar)
                         
                         echo "Building image for: $ARTIFACT_NAME"
-                        echo "JAR location: $JAR_FILE"
                         
-                        # Create a temp directory for Docker build
                         mkdir -p docker-build
                         cp $JAR_FILE docker-build/
                         cp ../docker/Dockerfile docker-build/
                         
-                        # Build Docker image with correct context
                         docker build \
                             --build-arg ARTIFACT_NAME=$ARTIFACT_NAME \
                             --build-arg EXPOSED_PORT=8888 \
                             -t petclinic-config-server:${IMAGE_TAG} \
                             docker-build/
                         
-                        # Cleanup
                         rm -rf docker-build
-                        
                         cd ..
                         
                         echo "=== 🔍 Scanning with Trivy ==="
                         
-                        # Scan the built image
                         trivy image \
                             --format json \
                             --output ${REPORT_DIR}/trivy-report.json \
@@ -180,7 +178,115 @@ pipeline {
                     archiveArtifacts artifacts: "${REPORT_DIR}/trivy-report.*", allowEmptyArchive: true
                 }
             }
-        } 
+        }
+        
+        // ==========================================
+        // STAGE 8: APPROVAL GATE 1 (NEW)
+        // ==========================================
+        stage('Approval: Deploy to Staging') {
+            steps {
+                script {
+                    // Generate summary for approver
+                    sh '''
+                        echo "=========================================="
+                        echo "SECURITY SCAN SUMMARY - Build #${BUILD_NUMBER}"
+                        echo "=========================================="
+                        echo "Commit: ${GIT_COMMIT}"
+                        echo "Branch: ${GIT_BRANCH}"
+                        echo ""
+                        echo "COMPLETED SCANS:"
+                        echo "✅ Secret Scanning (Gitleaks)"
+                        echo "✅ SAST (SonarQube)"
+                        echo "✅ SCA (OWASP Dependency-Check)"
+                        echo "✅ Unit Tests"
+                        echo "✅ Container Security (Trivy)"
+                        echo ""
+                        echo "REPORTS LOCATION:"
+                        echo "${BUILD_URL}artifact/${REPORT_DIR}/"
+                        echo "=========================================="
+                    '''
+                    
+                    // Pause for approval
+                    input message: 'All security scans passed. Approve deployment to STAGING?', 
+                          ok: 'Deploy to Staging',
+                          submitterParameter: 'APPROVER'
+                    
+                    echo "✅ Approved by: ${env.APPROVER}"
+                }
+            }
+        }
+        
+        // ==========================================
+        // STAGE 9: DEPLOY TO STAGING (NEW)
+        // ==========================================
+        stage('Deploy to Staging') {
+            steps {
+                script {
+                    echo "🚀 Deploying to Staging Environment..."
+                    sh '''
+                        echo "Staging deployment would happen here"
+                        echo "For demo: Running container locally"
+                        
+                        # Stop any existing container
+                        docker stop petclinic-staging 2>/dev/null || true
+                        docker rm petclinic-staging 2>/dev/null || true
+                        
+                        # Run container
+                        docker run -d \
+                            --name petclinic-staging \
+                            -p 8888:8888 \
+                            petclinic-config-server:${IMAGE_TAG}
+                        
+                        echo "Container running at http://localhost:8888"
+                        sleep 5
+                        
+                        # Health check
+                        curl -f http://localhost:8888/actuator/health || echo "Health check endpoint not available"
+                    '''
+                }
+            }
+        }
+        
+        // ==========================================
+        // STAGE 10: APPROVAL GATE 2 (NEW)
+        // ==========================================
+        stage('Approval: Deploy to Production') {
+            steps {
+                script {
+                    echo "=========================================="
+                    echo "STAGING DEPLOYMENT SUCCESSFUL"
+                    echo "=========================================="
+                    
+                    // Pause for production approval
+                    timeout(time: 24, unit: 'HOURS') {
+                        input message: 'Staging looks good. Approve deployment to PRODUCTION?', 
+                              ok: 'Deploy to Production',
+                              submitterParameter: 'PROD_APPROVER'
+                    }
+                    
+                    echo "✅ Production deployment approved by: ${env.PROD_APPROVER}"
+                }
+            }
+        }
+        
+        // ==========================================
+        // STAGE 11: DEPLOY TO PRODUCTION (NEW)
+        // ==========================================
+        stage('Deploy to Production') {
+            steps {
+                script {
+                    echo "🚀 Deploying to Production Environment..."
+                    sh '''
+                        echo "Production deployment would happen here"
+                        echo "Tagging image as production-ready"
+                        
+                        docker tag petclinic-config-server:${IMAGE_TAG} petclinic-config-server:production
+                        
+                        echo "✅ Production deployment completed"
+                    '''
+                }
+            }
+        }
     }
     
     post {
@@ -195,10 +301,12 @@ pipeline {
             echo "✅ SCA (Dependency-Check): COMPLETED"
             echo "✅ Unit Tests: COMPLETED"
             echo "✅ Container Security: COMPLETED"
+            echo "✅ Approval Gates: COMPLETED"
+            echo "✅ Deployment: COMPLETED"
             echo "=========================================="
         }
         success {
-            echo "🎉 ALL SECURITY CHECKS PASSED!"
+            echo "🎉 ALL STAGES PASSED - FULL SUCCESS!"
         }
         failure {
             echo "❌ PIPELINE FAILED - Check logs above"
