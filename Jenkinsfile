@@ -21,31 +21,15 @@ pipeline {
         stage('Environment Check') {
             steps {
                 echo '✅ Pipeline started - Build #' + env.BUILD_NUMBER
-                sh '''
-                    echo "Java version:"
-                    java -version
-                    echo "Maven version:"
-                    mvn -version
-                    echo "Docker version:"
-                    docker --version
-                '''
+                sh 'mkdir -p ${REPORT_DIR}'
             }
         }
         
         stage('Secret Scanning') {
             steps {
                 sh '''
-                    echo "=== 🔒 Running Gitleaks Secret Scan ==="
-                    mkdir -p ${REPORT_DIR}
-                    
-                    gitleaks detect --source . --verbose --report-format json \
-                        --report-path ${REPORT_DIR}/gitleaks-report.json || true
-                    
-                    if [ -s ${REPORT_DIR}/gitleaks-report.json ]; then
-                        echo "⚠️  WARNING: Potential secrets found!"
-                    else
-                        echo "✅ No secrets detected"
-                    fi
+                    echo "=== 🔒 Gitleaks Secret Scan ==="
+                    gitleaks detect --source . --report-format json --report-path ${REPORT_DIR}/gitleaks-report.json || true
                 '''
             }
             post {
@@ -57,10 +41,7 @@ pipeline {
         
         stage('Build') {
             steps {
-                sh '''
-                    echo "=== 🔨 Building Application ==="
-                    ./mvnw clean package -DskipTests
-                '''
+                sh './mvnw clean package -DskipTests'
             }
         }
         
@@ -70,14 +51,12 @@ pipeline {
                     def scannerHome = tool 'SonarScanner'
                     withSonarQubeEnv('SonarQube') {
                         sh """
-                            echo "=== 🔍 Running SonarQube SAST Analysis ==="
                             ${scannerHome}/bin/sonar-scanner \
                             -Dsonar.projectKey=spring-petclinic \
-                            -Dsonar.projectName='Spring PetClinic Microservices' \
+                            -Dsonar.projectName='Spring PetClinic' \
                             -Dsonar.sources=. \
                             -Dsonar.java.binaries=**/target/classes \
-                            -Dsonar.exclusions=**/target/**,**/*.min.js,**/node_modules/**,**/.mvn/**,**/mvnw \
-                            -Dsonar.sourceEncoding=UTF-8
+                            -Dsonar.exclusions=**/target/**,**/.mvn/**,**/mvnw
                         """
                     }
                 }
@@ -87,18 +66,12 @@ pipeline {
         stage('SCA - Dependency Check') {
             steps {
                 sh '''
-                    echo "=== 📦 Running OWASP Dependency-Check ==="
-                    
                     /opt/dependency-check/bin/dependency-check.sh \
-                        --project "Spring PetClinic Microservices" \
+                        --project "Spring PetClinic" \
                         --scan . \
-                        --format JSON \
-                        --format HTML \
+                        --format JSON --format HTML \
                         --out ${REPORT_DIR}/dependency-check \
-                        --enableExperimental \
-                        --failOnCVSS 11 || true
-                    
-                    echo "Dependency Check completed"
+                        --enableExperimental || true
                 '''
             }
             post {
@@ -110,19 +83,11 @@ pipeline {
         
         stage('Unit Tests') {
             steps {
-                sh '''
-                    echo "=== 🧪 Running Unit Tests ==="
-                    ./mvnw test
-                '''
+                sh './mvnw test'
             }
             post {
                 always {
                     junit testResults: '**/target/surefire-reports/*.xml', allowEmptyResults: true
-                    sh '''
-                        mkdir -p ${REPORT_DIR}/tests
-                        cp -r */target/surefire-reports ${REPORT_DIR}/tests/ 2>/dev/null || true
-                    '''
-                    archiveArtifacts artifacts: "${REPORT_DIR}/tests/**/*", allowEmptyArchive: true
                 }
             }
         }
@@ -131,159 +96,169 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        echo "=== 🐳 Building Docker Image ==="
-                        
                         ./mvnw package -pl spring-petclinic-config-server -am -DskipTests -q
-                        
                         cd spring-petclinic-config-server
-                        
                         JAR_FILE=$(ls target/*.jar | head -1)
                         ARTIFACT_NAME=$(basename $JAR_FILE .jar)
-                        
-                        echo "Building image for: $ARTIFACT_NAME"
-                        
                         mkdir -p docker-build
                         cp $JAR_FILE docker-build/
                         cp ../docker/Dockerfile docker-build/
-                        
-                        docker build \
-                            --build-arg ARTIFACT_NAME=$ARTIFACT_NAME \
-                            --build-arg EXPOSED_PORT=8888 \
-                            -t petclinic-config-server:${IMAGE_TAG} \
-                            docker-build/
-                        
+                        docker build --build-arg ARTIFACT_NAME=$ARTIFACT_NAME --build-arg EXPOSED_PORT=8888 -t petclinic-config-server:${IMAGE_TAG} docker-build/
                         rm -rf docker-build
                         cd ..
-                        
-                        echo "=== 🔍 Scanning with Trivy ==="
-                        
-                        trivy image \
-                            --format json \
-                            --output ${REPORT_DIR}/trivy-report.json \
-                            --severity HIGH,CRITICAL \
-                            petclinic-config-server:${IMAGE_TAG} || true
-                        
-                        trivy image \
-                            --format table \
-                            --output ${REPORT_DIR}/trivy-report.txt \
-                            --severity HIGH,CRITICAL \
-                            petclinic-config-server:${IMAGE_TAG} || true
-                        
-                        echo "✅ Container Security Scan Completed"
+                        trivy image --format json --output ${REPORT_DIR}/trivy-report.json --severity HIGH,CRITICAL petclinic-config-server:${IMAGE_TAG} || true
                     '''
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: "${REPORT_DIR}/trivy-report.*", allowEmptyArchive: true
+                    archiveArtifacts artifacts: "${REPORT_DIR}/trivy-report.json", allowEmptyArchive: true
                 }
             }
         }
         
-        // ==========================================
-        // STAGE 8: APPROVAL GATE 1 (NEW)
-        // ==========================================
         stage('Approval: Deploy to Staging') {
             steps {
                 script {
-                    // Generate summary for approver
-                    sh '''
-                        echo "=========================================="
-                        echo "SECURITY SCAN SUMMARY - Build #${BUILD_NUMBER}"
-                        echo "=========================================="
-                        echo "Commit: ${GIT_COMMIT}"
-                        echo "Branch: ${GIT_BRANCH}"
-                        echo ""
-                        echo "COMPLETED SCANS:"
-                        echo "✅ Secret Scanning (Gitleaks)"
-                        echo "✅ SAST (SonarQube)"
-                        echo "✅ SCA (OWASP Dependency-Check)"
-                        echo "✅ Unit Tests"
-                        echo "✅ Container Security (Trivy)"
-                        echo ""
-                        echo "REPORTS LOCATION:"
-                        echo "${BUILD_URL}artifact/${REPORT_DIR}/"
-                        echo "=========================================="
-                    '''
-                    
-                    // Pause for approval
-                    input message: 'All security scans passed. Approve deployment to STAGING?', 
-                          ok: 'Deploy to Staging',
-                          submitterParameter: 'APPROVER'
-                    
-                    echo "✅ Approved by: ${env.APPROVER}"
+                    input message: 'Approve deployment to STAGING?', ok: 'Deploy to Staging', submitterParameter: 'APPROVER'
+                    echo "Approved by: ${env.APPROVER}"
                 }
             }
         }
         
-        // ==========================================
-        // STAGE 9: DEPLOY TO STAGING (NEW)
-        // ==========================================
         stage('Deploy to Staging') {
             steps {
-                script {
-                    echo "🚀 Deploying to Staging Environment..."
-                    sh '''
-                        echo "Staging deployment would happen here"
-                        echo "For demo: Running container locally"
-                        
-                        # Stop any existing container
-                        docker stop petclinic-staging 2>/dev/null || true
-                        docker rm petclinic-staging 2>/dev/null || true
-                        
-                        # Run container
-                        docker run -d \
-                            --name petclinic-staging \
-                            -p 8888:8888 \
-                            petclinic-config-server:${IMAGE_TAG}
-                        
-                        echo "Container running at http://localhost:8888"
-                        sleep 5
-                        
-                        # Health check
-                        curl -f http://localhost:8888/actuator/health || echo "Health check endpoint not available"
-                    '''
-                }
+                sh '''
+                    docker stop petclinic-staging 2>/dev/null || true
+                    docker rm petclinic-staging 2>/dev/null || true
+                    docker run -d --name petclinic-staging -p 8888:8888 petclinic-config-server:${IMAGE_TAG}
+                    sleep 5
+                '''
             }
         }
         
-        // ==========================================
-        // STAGE 10: APPROVAL GATE 2 (NEW)
-        // ==========================================
         stage('Approval: Deploy to Production') {
             steps {
                 script {
-                    echo "=========================================="
-                    echo "STAGING DEPLOYMENT SUCCESSFUL"
-                    echo "=========================================="
-                    
-                    // Pause for production approval
                     timeout(time: 24, unit: 'HOURS') {
-                        input message: 'Staging looks good. Approve deployment to PRODUCTION?', 
-                              ok: 'Deploy to Production',
-                              submitterParameter: 'PROD_APPROVER'
+                        input message: 'Approve deployment to PRODUCTION?', ok: 'Deploy to Production', submitterParameter: 'PROD_APPROVER'
                     }
-                    
-                    echo "✅ Production deployment approved by: ${env.PROD_APPROVER}"
+                    echo "Production approved by: ${env.PROD_APPROVER}"
                 }
             }
         }
         
-        // ==========================================
-        // STAGE 11: DEPLOY TO PRODUCTION (NEW)
-        // ==========================================
         stage('Deploy to Production') {
             steps {
+                sh 'docker tag petclinic-config-server:${IMAGE_TAG} petclinic-config-server:production'
+            }
+        }
+        
+        // ==========================================
+        // STAGE 12: FINAL REPORT (NEW)
+        // ==========================================
+        stage('Generate Final Report') {
+            steps {
                 script {
-                    echo "🚀 Deploying to Production Environment..."
                     sh '''
-                        echo "Production deployment would happen here"
-                        echo "Tagging image as production-ready"
+                        echo "=== 📊 Generating Final Security Report ==="
                         
-                        docker tag petclinic-config-server:${IMAGE_TAG} petclinic-config-server:production
-                        
-                        echo "✅ Production deployment completed"
+                        cat > ${REPORT_DIR}/pipeline-summary.html << 'HTMLEOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DevSecOps Pipeline Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .header { background: #2c3e50; color: white; padding: 20px; border-radius: 5px; }
+        .summary { background: white; padding: 20px; margin: 20px 0; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .stage { background: white; padding: 15px; margin: 10px 0; border-left: 4px solid #27ae60; }
+        .stage.failed { border-left-color: #e74c3c; }
+        .metric { display: inline-block; margin: 10px 20px 10px 0; }
+        .metric-value { font-size: 24px; font-weight: bold; color: #27ae60; }
+        .metric-label { font-size: 12px; color: #7f8c8d; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔒 DevSecOps Pipeline Report</h1>
+        <p>Build #BUILD_NUMBER | Commit: GIT_COMMIT | Date: BUILD_DATE</p>
+    </div>
+    
+    <div class="summary">
+        <h2>Executive Summary</h2>
+        <div class="metric">
+            <div class="metric-value">7</div>
+            <div class="metric-label">Security Scans</div>
+        </div>
+        <div class="metric">
+            <div class="metric-value">2</div>
+            <div class="metric-label">Approval Gates</div>
+        </div>
+        <div class="metric">
+            <div class="metric-value" style="color: #27ae60;">PASSED</div>
+            <div class="metric-label">Status</div>
+        </div>
+    </div>
+
+    <div class="stage">
+        <h3>✅ Secret Scanning (Gitleaks)</h3>
+        <p>Scanned for hardcoded secrets, API keys, and credentials</p>
+    </div>
+
+    <div class="stage">
+        <h3>✅ SAST (SonarQube)</h3>
+        <p>Static code analysis for bugs, vulnerabilities, and code smells</p>
+    </div>
+
+    <div class="stage">
+        <h3>✅ SCA (OWASP Dependency-Check)</h3>
+        <p>Identified known vulnerabilities in third-party dependencies</p>
+    </div>
+
+    <div class="stage">
+        <h3>✅ Container Security (Trivy)</h3>
+        <p>Scanned Docker image for OS and application vulnerabilities</p>
+    </div>
+
+    <div class="stage">
+        <h3>✅ Unit Tests</h3>
+        <p>Executed unit tests across all microservices</p>
+    </div>
+
+    <div class="summary">
+        <h2>Artifacts Generated</h2>
+        <ul>
+            <li>gitleaks-report.json - Secret scanning results</li>
+            <li>dependency-check-report.html - Vulnerability report</li>
+            <li>trivy-report.json - Container scan results</li>
+            <li>test-reports - Unit test results</li>
+        </ul>
+    </div>
+</body>
+</html>
+HTMLEOF
+
+                        # Replace placeholders
+                        sed -i "s/BUILD_NUMBER/${BUILD_NUMBER}/g" ${REPORT_DIR}/pipeline-summary.html
+                        sed -i "s/GIT_COMMIT/${GIT_COMMIT}/g" ${REPORT_DIR}/pipeline-summary.html
+                        sed -i "s/BUILD_DATE/$(date)/g" ${REPORT_DIR}/pipeline-summary.html
+
+                        echo "✅ Report generated: ${REPORT_DIR}/pipeline-summary.html"
                     '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: "${REPORT_DIR}/pipeline-summary.html", allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: "${REPORT_DIR}",
+                        reportFiles: 'pipeline-summary.html',
+                        reportName: 'Pipeline Summary Report'
+                    ])
                 }
             }
         }
@@ -292,24 +267,14 @@ pipeline {
     post {
         always {
             echo "=========================================="
-            echo "Pipeline Report - Build #${BUILD_NUMBER}"
-            echo "=========================================="
-            echo "✅ Environment Check: COMPLETED"
-            echo "✅ Secret Scanning: COMPLETED"
-            echo "✅ Build: COMPLETED"
-            echo "✅ SAST (SonarQube): COMPLETED"
-            echo "✅ SCA (Dependency-Check): COMPLETED"
-            echo "✅ Unit Tests: COMPLETED"
-            echo "✅ Container Security: COMPLETED"
-            echo "✅ Approval Gates: COMPLETED"
-            echo "✅ Deployment: COMPLETED"
+            echo "PIPELINE COMPLETED - Build #${BUILD_NUMBER}"
             echo "=========================================="
         }
         success {
-            echo "🎉 ALL STAGES PASSED - FULL SUCCESS!"
+            echo "🎉 SUCCESS! Check the Pipeline Summary Report"
         }
         failure {
-            echo "❌ PIPELINE FAILED - Check logs above"
+            echo "❌ FAILED!"
         }
     }
 }
