@@ -20,7 +20,7 @@ pipeline {
     stages {
         stage('Environment Check') {
             steps {
-                echo '✅ Pipeline started - Build #' + env.BUILD_NUMBER
+                echo ' Pipeline started - Build #' + env.BUILD_NUMBER
                 sh 'mkdir -p ${REPORT_DIR}'
             }
         }
@@ -28,7 +28,7 @@ pipeline {
         stage('Secret Scanning') {
             steps {
                 sh '''
-                    echo "=== 🔒 Gitleaks Secret Scan ==="
+                    echo "===  Gitleaks Secret Scan ==="
                     gitleaks detect --source . --report-format json --report-path ${REPORT_DIR}/gitleaks-report.json || true
                 '''
             }
@@ -181,7 +181,7 @@ pipeline {
 </head>
 <body>
     <div class="header">
-        <h1>🔒 DevSecOps Pipeline Report</h1>
+        <h1> DevSecOps Pipeline Report</h1>
         <p>Build #BUILD_NUMBER | Commit: GIT_COMMIT | Date: BUILD_DATE</p>
     </div>
     
@@ -202,27 +202,27 @@ pipeline {
     </div>
 
     <div class="stage">
-        <h3>✅ Secret Scanning (Gitleaks)</h3>
+        <h3> Secret Scanning (Gitleaks)</h3>
         <p>Scanned for hardcoded secrets, API keys, and credentials</p>
     </div>
 
     <div class="stage">
-        <h3>✅ SAST (SonarQube)</h3>
+        <h3> SAST (SonarQube)</h3>
         <p>Static code analysis for bugs, vulnerabilities, and code smells</p>
     </div>
 
     <div class="stage">
-        <h3>✅ SCA (OWASP Dependency-Check)</h3>
+        <h3> SCA (OWASP Dependency-Check)</h3>
         <p>Identified known vulnerabilities in third-party dependencies</p>
     </div>
 
     <div class="stage">
-        <h3>✅ Container Security (Trivy)</h3>
+        <h3> Container Security (Trivy)</h3>
         <p>Scanned Docker image for OS and application vulnerabilities</p>
     </div>
 
     <div class="stage">
-        <h3>✅ Unit Tests</h3>
+        <h3> Unit Tests</h3>
         <p>Executed unit tests across all microservices</p>
     </div>
 
@@ -244,7 +244,7 @@ HTMLEOF
                         sed -i "s/GIT_COMMIT/${GIT_COMMIT}/g" ${REPORT_DIR}/pipeline-summary.html
                         sed -i "s/BUILD_DATE/$(date)/g" ${REPORT_DIR}/pipeline-summary.html
 
-                        echo "✅ Report generated: ${REPORT_DIR}/pipeline-summary.html"
+                        echo " Report generated: ${REPORT_DIR}/pipeline-summary.html"
                     '''
                 }
             }
@@ -271,10 +271,10 @@ HTMLEOF
             echo "=========================================="
         }
         success {
-            echo "🎉 SUCCESS! Check the Pipeline Summary Report"
+            echo " SUCCESS! Check the Pipeline Summary Report"
         }
         failure {
-            echo "❌ FAILED!"
+            echo " FAILED!"
         }
     }
 }
